@@ -5,18 +5,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 const points = [
   {
-    title: 'Voice-first AI interviewer',
-    text: 'Run autonomous interview sessions using Puter chat, speech-to-text, and text-to-speech in one flow.',
+    title: 'Real AI Interviewer',
+    text: 'Your AI conducts actual interviews—asking follow-up questions, probing deeper, and adapting to your level. Pick your interviewer (CEO, CTO, HR, Manager) and get grilled.',
     icon: Mic,
   },
   {
-    title: 'Integrity control',
-    text: 'Tab-switch guardrails and auto-termination on policy violations with clear reschedule guidance.',
+    title: 'No Cheating Allowed',
+    text: 'Tab away? We catch it. Copy-paste an answer? We know. This is a real interview to prepare for real interviews.',
     icon: ShieldCheck,
   },
   {
-    title: 'Instant final report',
-    text: 'Structured scoring, strengths, weaknesses, and improvement plans saved after each interview.',
+    title: 'Honest Scoring & Plan',
+    text: 'You get a score, your strengths, weaknesses, and exactly what to work on next. No participation trophy—real feedback for real improvement.',
     icon: Sparkles,
   },
 ];
@@ -28,20 +28,20 @@ export default function Home() {
         <div className="flex max-w-3xl flex-col gap-5">
           <p className="inline-flex w-fit items-center gap-2 rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-800 dark:border-cyan-300/30 dark:text-cyan-200">
             <BotMessageSquare className="h-3.5 w-3.5" />
-            Interview Room OS
+            Practice Now, Crush Later
           </p>
           <h1 className="text-4xl font-semibold tracking-tight text-slate-900 dark:text-slate-100 md:text-5xl">
-            Build, run, and evaluate AI interviews with route-based flow
+            Interview yourself before they interview you
           </h1>
           <p className="text-base text-slate-700 dark:text-slate-300 md:text-lg">
-            Start from setup, conduct a Meet-style interview room, and review a structured report. Theme toggle and Puter login are integrated globally.
+            Go through 5 questions with AI that adapts to you. Speak naturally, get scored, see what you nailed and what to fix. No prep-speak required.
           </p>
           <div className="flex flex-wrap gap-3 pt-2">
             <Button asChild size="lg">
-              <Link href="/setup">Create Interview</Link>
+              <Link href="/setup">Get Interviewed 🎯</Link>
             </Button>
             <Button asChild variant="outline" size="lg">
-              <Link href="/interview">Go to Interview Room</Link>
+              <Link href="/interview">Practice Now 🚀</Link>
             </Button>
           </div>
         </div>
