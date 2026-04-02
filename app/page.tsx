@@ -16,7 +16,7 @@ const points = [
   },
   {
     title: 'Honest Scoring & Plan',
-    text: 'You get a score, your strengths, weaknesses, and exactly what to work on next. No participation trophy—real feedback for real improvement.',
+    text: 'You get a score, your strengths, weaknesses, and exactly what to work on next. No participation trophy real feedback for real improvement.',
     icon: Sparkles,
   },
 ];
@@ -38,10 +38,10 @@ export default function Home() {
           </p>
           <div className="flex flex-wrap gap-3 pt-2">
             <Button asChild size="lg">
-              <Link href="/setup">Get Interviewed 🎯</Link>
+              <Link href="/setup">Get Interviewed</Link>
             </Button>
             <Button asChild variant="outline" size="lg">
-              <Link href="/interview">Practice Now 🚀</Link>
+              <Link href="/interview">Practice Now</Link>
             </Button>
           </div>
         </div>
