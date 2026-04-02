@@ -1,5 +1,5 @@
 {
   "name": "AI Interview Pro",
-  "description": "AI-powered Google Meet interviewer using Puter.js",
+  "description": "AI-powered interview simulator using Puter.js",
   "requestFramePermissions": ["camera", "microphone"]
 }

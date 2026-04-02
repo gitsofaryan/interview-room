@@ -1,508 +1,751 @@
-import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, AlertTriangle, Loader2 } from 'lucide-react';
-import { InterviewConfig, TranscriptItem, ReportData } from '@/types';
+'use client';
 
-export default function InterviewRoom({ config, onEnd }: { config: InterviewConfig, onEnd: (t: TranscriptItem[], r: ReportData) => void }) {
-  const [isMicOn, setIsMicOn] = useState(false);
-  const [isCamOn, setIsCamOn] = useState(true);
-  const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
-  const [isAiSpeaking, setIsAiSpeaking] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [notes, setNotes] = useState('');
-  const [questionCount, setQuestionCount] = useState(1);
-  const [flags, setFlags] = useState<string[]>([]);
-  const [timeElapsed, setTimeElapsed] = useState(0);
-  const [activeTab, setActiveTab] = useState<'notes' | 'transcript'>('notes');
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { AlertTriangle, ClipboardList, Loader2, Mic, MicOff, NotebookPen, PhoneOff, Video, VideoOff } from 'lucide-react';
+import { InterviewConfig, ReportData, TranscriptItem } from '@/types';
+import { ensurePuterSignedIn, readChatText, readSpeechText, tryParseReport, waitForPuter } from '@/lib/puter';
+import { getSessionState, setSessionState } from '@/lib/interview-session';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
+import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<BlobPart[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-  const transcriptEndRef = useRef<HTMLDivElement>(null);
+const MAX_QUESTIONS = 5;
+const MAX_TAB_SWITCHES = 5;
+const AI_RESPONSE_TIMEOUT_MS = 20000;
+const AI_MAX_RETRIES = 2;
 
-  const MAX_QUESTIONS = 5;
+const makeId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  // Helper to extract text from Puter AI response safely
-  const extractText = (res: any): string => {
-    if (typeof res === 'string') return res;
-    if (res?.message?.content) {
-      if (Array.isArray(res.message.content)) {
-        return res.message.content.map((c: any) => c.text || '').join('');
-      }
-      return res.message.content;
-    }
-    if (res?.text) return res.text;
-    return JSON.stringify(res);
-  };
+const formatClock = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const rem = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${rem.toString().padStart(2, '0')}`;
+};
 
-  // Setup Webcam
-  useEffect(() => {
-    let mounted = true;
-    const setupMedia = async () => {
-      try {
-        let stream: MediaStream;
+const fallbackQuestion = (config: InterviewConfig) =>
+    `Hi ${config.name}, I am your ${config.persona} interviewer today. Let us start with this: tell me about your experience relevant to ${config.role}.`;
+
+export default function InterviewRoom({ config, onEnd }: { config: InterviewConfig; onEnd: (t: TranscriptItem[], r: ReportData) => void }) {
+    const [isMicOn, setIsMicOn] = useState(false);
+    const [isCamOn, setIsCamOn] = useState(true);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [isAiSpeaking, setIsAiSpeaking] = useState(false);
+    const [activeTab, setActiveTab] = useState<'notes' | 'transcript'>('notes');
+    const [questionCount, setQuestionCount] = useState(0);
+    const [timeElapsed, setTimeElapsed] = useState(0);
+    const [tabSwitchCount, setTabSwitchCount] = useState(0);
+    const [pasteCount, setPasteCount] = useState(0);
+    const [notes, setNotes] = useState('');
+    const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
+
+    const transcriptRef = useRef<TranscriptItem[]>([]);
+    const questionCountRef = useRef(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<BlobPart[]>([]);
+    const streamRef = useRef<MediaStream | null>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const transcriptEndRef = useRef<HTMLDivElement>(null);
+    const endedByPolicyRef = useRef(false);
+
+    const progress = useMemo(() => Math.min(100, Math.round((questionCount / MAX_QUESTIONS) * 100)), [questionCount]);
+
+    const setTranscriptWithRef = (next: TranscriptItem[]) => {
+        transcriptRef.current = next;
+        setTranscript(next);
+        setSessionState({ transcript: next });
+    };
+
+    const appendTranscript = (role: TranscriptItem['role'], text: string) => {
+        const item: TranscriptItem = {
+            id: makeId(),
+            role,
+            text,
+        };
+        const next = [...transcriptRef.current, item];
+        setTranscriptWithRef(next);
+        return next;
+    };
+
+    const speak = async (text: string) => {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        } catch (err) {
-          console.warn("Video+Audio failed, trying Audio only", err);
-          try {
-            stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-            setIsCamOn(false);
-          } catch (err2) {
-            console.warn("Audio only failed", err2);
-            stream = new MediaStream();
-            setIsCamOn(false);
-          }
+            setIsAiSpeaking(true);
+            const client = await waitForPuter();
+            console.log('[TTS] Starting text-to-speech for:', text.substring(0, 50));
+
+            const result = await client.ai.txt2speech(text);
+            console.log('[TTS] Result type:', typeof result, 'Is Audio?', result instanceof HTMLAudioElement);
+
+            // Handle both Audio element and URL responses
+            let audio: HTMLAudioElement;
+            if (result instanceof HTMLAudioElement) {
+                audio = result;
+            } else if (typeof result === 'string') {
+                // Result is a URL
+                audio = new Audio(result);
+            } else if (result && typeof result === 'object' && 'play' in result) {
+                // Result is already an audio-like object
+                audio = result as HTMLAudioElement;
+            } else {
+                console.warn('[TTS] Unexpected result type:', result);
+                return;
+            }
+
+            await new Promise<void>((resolve) => {
+                const timeout = setTimeout(() => {
+                    console.warn('[TTS] Audio playback timeout');
+                    resolve();
+                }, 15000);
+
+                audio.onended = () => {
+                    clearTimeout(timeout);
+                    console.log('[TTS] Audio ended normally');
+                    resolve();
+                };
+                audio.onerror = (err) => {
+                    clearTimeout(timeout);
+                    console.error('[TTS] Audio error:', err);
+                    resolve();
+                };
+
+                const playPromise = audio.play();
+                if (playPromise && typeof playPromise.then === 'function') {
+                    playPromise
+                        .then(() => console.log('[TTS] Audio playing'))
+                        .catch((err) => {
+                            console.error('[TTS] Play error:', err);
+                        });
+                } else {
+                    console.log('[TTS] Play returned non-promise');
+                }
+            });
+        } catch (error) {
+            console.error('[TTS] Exception:', error);
+        } finally {
+            setIsAiSpeaking(false);
+        }
+    };
+
+    const terminateDueToIntegrity = () => {
+        if (endedByPolicyRef.current) return;
+        endedByPolicyRef.current = true;
+
+        const warningText =
+            'Interview ended due to repeated tab switching. Please request admin to reschedule your interview.';
+        const finalTranscript = appendTranscript('interviewer', warningText);
+
+        const report: ReportData = {
+            score: 0,
+            recommendation: 'No Hire',
+            strengths: [],
+            weaknesses: ['Interview integrity policy was violated due to repeated tab switching.'],
+            feedback: warningText,
+            roundScores: {},
+            improvementPlan: ['Contact admin and request interview reschedule.'],
+        };
+
+        setSessionState({
+            report,
+            endedByIntegrity: true,
+            transcript: finalTranscript,
+            tabSwitchCount,
+            pasteCount,
+            notes,
+        });
+
+        alert('Interview ended. Please request admin to reschedule.');
+        onEnd(finalTranscript, report);
+    };
+
+    const askInterviewer = async (prompt: string): Promise<string> => {
+        console.log('[AI] Sending prompt:', prompt.substring(0, 100));
+        const client = await waitForPuter();
+
+        for (let attempt = 1; attempt <= AI_MAX_RETRIES; attempt += 1) {
+            try {
+                const timeoutPromise = new Promise<string>((_, reject) => {
+                    setTimeout(() => reject(new Error('AI request timeout')), AI_RESPONSE_TIMEOUT_MS);
+                });
+
+                const responsePromise = (async () => {
+                    const response = await client.ai.chat(prompt);
+                    return readChatText(response);
+                })();
+
+                const text = (await Promise.race([responsePromise, timeoutPromise])).trim();
+                if (text.length > 0) {
+                    return text;
+                }
+                console.warn(`[AI] Empty response on attempt ${attempt}`);
+            } catch (error) {
+                console.warn(`[AI] Attempt ${attempt} failed`, error);
+            }
         }
 
-        if (!mounted) {
-          stream.getTracks().forEach(t => t.stop());
-          return;
+        return '';
+    };
+
+    const endInterview = async (finalTranscript: TranscriptItem[] = transcriptRef.current) => {
+        if (endedByPolicyRef.current) {
+            return;
         }
-        streamRef.current = stream;
-        if (videoRef.current && stream.getVideoTracks().length > 0) {
-          videoRef.current.srcObject = stream;
-        }
-        // Mute the audio track initially so we don't record until user clicks mic
-        stream.getAudioTracks().forEach(t => t.enabled = false);
-      } catch (err) {
-        console.error("Failed to get media", err);
-      }
-    };
-    setupMedia();
 
-    return () => {
-      mounted = false;
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, []);
+        setIsProcessing(true);
+        try {
+            const history = finalTranscript
+                .map((item) => `${item.role === 'interviewer' ? config.persona : 'Candidate'}: ${item.text}`)
+                .join('\n');
 
-  // Timer
-  useEffect(() => {
-    const timer = setInterval(() => setTimeElapsed(prev => prev + 1), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // Proctoring
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) {
-        setFlags(prev => [...prev, 'Tab switched']);
-        // @ts-ignore
-        if (window.puter) puter.kv.set("tab_switch", true);
-      }
-    };
-    const handlePaste = () => {
-      setFlags(prev => [...prev, 'Paste detected']);
-      // @ts-ignore
-      if (window.puter) puter.kv.set("paste_detected", true);
-    };
-
-    document.addEventListener("visibilitychange", handleVisibility);
-    document.addEventListener("paste", handlePaste);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-      document.removeEventListener("paste", handlePaste);
-    };
-  }, []);
-
-  // Auto-scroll transcript
-  useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [transcript]);
-
-  // Initial AI Greeting
-  useEffect(() => {
-    const startInterview = async () => {
-      setIsProcessing(true);
-      try {
-        const prompt = `
-You are a ${config.persona} interviewer. The candidate is ${config.name} applying for ${config.role}.
-Job Description: ${config.jd}
+            const evaluationPrompt = `
+Evaluate this interview for ${config.role}.
+Candidate: ${config.name}
+Persona: ${config.persona}
 Rounds: ${config.rounds.join(', ')}
 Difficulty: ${config.difficulty}
 
-Start the interview by introducing yourself briefly and asking the very first question.
-Keep it concise and natural, like a real conversation.
+Conversation:
+${history}
+
+Return only JSON with:
+{
+  "score": 8.2,
+  "recommendation": "Hire",
+  "strengths": ["..."],
+  "weaknesses": ["..."],
+  "feedback": "...",
+  "roundScores": {"Technical": 8.0},
+  "improvementPlan": ["..."]
+}
 `;
-        // @ts-ignore
-        const res = await puter.ai.chat(prompt, { model: 'claude-3-5-sonnet' });
-        const text = extractText(res);
-        
-        addTranscript('interviewer', text);
-        await playAiVoice(text);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setIsProcessing(false);
-      }
+
+            const response = await askInterviewer(evaluationPrompt);
+            const report: ReportData = response
+                ? tryParseReport(response)
+                : {
+                    score: 0,
+                    recommendation: 'No Hire',
+                    strengths: [],
+                    weaknesses: ['Evaluation model response was unavailable.'],
+                    feedback: 'Evaluation could not be completed automatically.',
+                    roundScores: {},
+                    improvementPlan: ['Retry interview evaluation from setup.'],
+                };
+
+            setSessionState({
+                transcript: finalTranscript,
+                report,
+                notes,
+                tabSwitchCount,
+                pasteCount,
+            });
+
+            try {
+                const client = await waitForPuter();
+                await client.fs.write(
+                    `interview_report_${Date.now()}.json`,
+                    JSON.stringify(
+                        {
+                            config,
+                            transcript: finalTranscript,
+                            notes,
+                            tabSwitchCount,
+                            pasteCount,
+                            report,
+                        },
+                        null,
+                        2
+                    )
+                );
+            } catch (error) {
+                console.error('Could not persist report file', error);
+            }
+
+            onEnd(finalTranscript, report);
+        } catch (error) {
+            console.error('Evaluation failed', error);
+            const fallback: ReportData = {
+                score: 0,
+                recommendation: 'No Hire',
+                strengths: [],
+                weaknesses: ['Automatic evaluation failed unexpectedly.'],
+                feedback: 'Interview completed but report generation failed. Please request admin to re-evaluate.',
+                roundScores: {},
+                improvementPlan: ['Request admin support for evaluation rerun.'],
+            };
+            setSessionState({ report: fallback, transcript: finalTranscript, notes, tabSwitchCount, pasteCount });
+            onEnd(finalTranscript, fallback);
+        } finally {
+            setIsProcessing(false);
+        }
     };
-    startInterview();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  const addTranscript = (role: 'interviewer' | 'candidate', text: string) => {
-    setTranscript(prev => [...prev, { id: Math.random().toString(), role, text }]);
-  };
+    const generateNextQuestion = async (userAnswer: string, fullTranscript: TranscriptItem[]) => {
+        if (endedByPolicyRef.current) return;
 
-  const playAiVoice = async (text: string) => {
-    setIsAiSpeaking(true);
-    try {
-      // @ts-ignore
-      const audioEl = await puter.ai.txt2speech(text);
-      // Wait for audio to finish playing
-      await new Promise((resolve) => {
-        audioEl.onended = resolve;
-        audioEl.onerror = resolve;
-        audioEl.play().catch((err: any) => {
-          console.error("Audio play failed (autoplay blocked?)", err);
-          resolve(null);
-        });
-      });
-    } catch (err) {
-      console.error("TTS failed", err);
-    } finally {
-      setIsAiSpeaking(false);
-    }
-  };
+        if (questionCountRef.current >= MAX_QUESTIONS) {
+            console.log('[Q-GEN] Max questions reached, ending interview');
+            await endInterview(fullTranscript);
+            return;
+        }
 
-  const toggleMic = () => {
-    if (!streamRef.current) return;
-    
-    if (isMicOn) {
-      // Stop recording
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-      streamRef.current.getAudioTracks().forEach(t => t.enabled = false);
-      setIsMicOn(false);
-    } else {
-      // Start recording
-      streamRef.current.getAudioTracks().forEach(t => t.enabled = true);
-      const recorder = new MediaRecorder(streamRef.current);
-      audioChunksRef.current = [];
-      
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        await processUserAudio(audioBlob);
-      };
-      
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsMicOn(true);
-    }
-  };
+        const history = fullTranscript
+            .map((item) => `${item.role === 'interviewer' ? config.persona : 'Candidate'}: ${item.text}`)
+            .join('\n');
 
-  const toggleCam = () => {
-    if (!streamRef.current) return;
-    const videoTrack = streamRef.current.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      setIsCamOn(videoTrack.enabled);
-    }
-  };
+        const prompt = `You are interviewing a candidate for ${config.role}. Be conversational and natural, like a real interviewer would be.
 
-  const processUserAudio = async (audioBlob: Blob) => {
-    setIsProcessing(true);
-    try {
-      // @ts-ignore
-      const text = await puter.ai.speech2txt(audioBlob);
-      if (text && text.trim().length > 0) {
-        addTranscript('candidate', text);
-        await generateNextQuestion(text);
-      }
-    } catch (err) {
-      console.error("STT failed", err);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const generateNextQuestion = async (userAnswer: string) => {
-    if (questionCount >= MAX_QUESTIONS) {
-      await endInterview();
-      return;
-    }
-
-    const historyText = transcript.map(t => `${t.role === 'interviewer' ? config.persona : 'Candidate'}: ${t.text}`).join('\n');
-    
-    const prompt = `
-You are a ${config.persona} interviewer.
-Round: ${config.rounds.join(', ')}
+Candidate: ${config.name}
 Difficulty: ${config.difficulty}
 
-Previous conversation:
-${historyText}
-Candidate just answered: ${userAnswer}
+Recent exchange:
+${history}
 
-Ask the next question. It can be a follow-up to their answer or a new question. Keep it concise.
-`;
-    try {
-      // @ts-ignore
-      const res = await puter.ai.chat(prompt, { model: 'claude-3-5-sonnet' });
-      const nextQ = extractText(res);
-      
-      addTranscript('interviewer', nextQ);
-      setQuestionCount(prev => prev + 1);
-      await playAiVoice(nextQ);
-    } catch (err) {
-      console.error(err);
-    }
-  };
+The candidate just said: "${userAnswer}"
 
-  const endInterview = async () => {
-    setIsProcessing(true);
-    try {
-      const historyText = transcript.map(t => `${t.role === 'interviewer' ? config.persona : 'Candidate'}: ${t.text}`).join('\n');
-      const prompt = `
-Evaluate the following interview for the role of ${config.role}.
+Ask ONE follow-up question that:
+1. Probes deeper into what they said
+2. Sounds natural and conversational
+3. Is appropriately challenging for a ${config.difficulty} level
+4. Is concise (1-2 sentences max)
+
+Respond with ONLY the question, nothing else.`;
+
+        console.log('[Q-GEN] Generating question', questionCount + 1);
+        const nextQuestion = await askInterviewer(prompt);
+        const safeQuestion = nextQuestion && nextQuestion.trim().length > 8
+            ? nextQuestion
+            : `Can you walk me through a specific example from your recent work that showcases your ${config.role} skills?`;
+        appendTranscript('interviewer', safeQuestion);
+        setQuestionCount((prev) => {
+            const next = Math.min(MAX_QUESTIONS, prev + 1);
+            questionCountRef.current = next;
+            return next;
+        });
+        await speak(safeQuestion);
+    };
+
+    const processUserAudio = async (audioBlob: Blob) => {
+        if (endedByPolicyRef.current) return;
+
+        setIsProcessing(true);
+        try {
+            console.log('[AUDIO] Processing audio blob:', audioBlob.size, 'bytes');
+            const client = await waitForPuter();
+            const rawText = await client.ai.speech2txt(audioBlob);
+            console.log('[AUDIO] Raw speech2txt response:', rawText);
+            const text = readSpeechText(rawText).trim();
+            console.log('[AUDIO] Parsed text:', text);
+
+            if (!text || text.length < 2) {
+                console.warn('[AUDIO] No text extracted from speech, blob size was:', audioBlob.size);
+                appendTranscript('interviewer', 'I couldn\'t catch that - could you please speak up and try again?');
+                return;
+            }
+
+            const next = appendTranscript('candidate', text);
+
+            // If user just answered the final allowed question, end immediately with report.
+            if (questionCountRef.current >= MAX_QUESTIONS) {
+                await endInterview(next);
+                return;
+            }
+
+            await generateNextQuestion(text, next);
+        } catch (error) {
+            console.error('[AUDIO] Speech to text failed', error);
+            appendTranscript('interviewer', 'Audio processing failed. Please retry your answer.');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const toggleMic = () => {
+        if (!streamRef.current || endedByPolicyRef.current || isProcessing) return;
+
+        const audioTrack = streamRef.current.getAudioTracks()[0];
+        if (!audioTrack) {
+            console.error('[MIC] No audio track available');
+            alert('Microphone not available.');
+            return;
+        }
+
+        if (isMicOn) {
+            console.log('[MIC] Stopping recording');
+            mediaRecorderRef.current?.stop();
+            setIsMicOn(false);
+            return;
+        }
+
+        try {
+            const clonedAudio = audioTrack.clone();
+            const micStream = new MediaStream([clonedAudio]);
+
+            // Try different MIME types for better browser support
+            let mimeType = 'audio/webm';
+            if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                mimeType = 'audio/mp4';
+            } else if (MediaRecorder.isTypeSupported('audio/wav')) {
+                mimeType = 'audio/wav';
+            }
+
+            const recorder = new MediaRecorder(micStream, { mimeType });
+            console.log('[MIC] Recording started with MIME type:', mimeType);
+
+            audioChunksRef.current = [];
+            recorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    console.log('[MIC] Audio chunk received:', event.data.size, 'bytes');
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            recorder.onerror = (event) => {
+                console.error('[MIC] Recording error:', event.error);
+                clonedAudio.stop();
+                setIsMicOn(false);
+            };
+
+            recorder.onstop = async () => {
+                console.log('[MIC] Recording stopped, total chunks:', audioChunksRef.current.length);
+                clonedAudio.stop();
+                const blob = new Blob(audioChunksRef.current, { type: mimeType });
+                console.log('[MIC] Blob created:', blob.size, 'bytes, type:', blob.type);
+                if (blob.size > 0) {
+                    await processUserAudio(blob);
+                } else {
+                    console.warn('[MIC] Blob is empty!');
+                    appendTranscript('interviewer', 'The recording was empty. Please try again.');
+                }
+            };
+
+            recorder.start();
+            mediaRecorderRef.current = recorder;
+            setIsMicOn(true);
+            console.log('[MIC] Microphone ready for recording');
+        } catch (error) {
+            console.error('[MIC] Failed to start recording:', error);
+            alert('Failed to start microphone. Check browser permissions.');
+        }
+    };
+
+    const toggleCam = () => {
+        const videoTrack = streamRef.current?.getVideoTracks()[0];
+        if (!videoTrack) return;
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsCamOn(videoTrack.enabled);
+    };
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        let mounted = true;
+
+        const init = async () => {
+            try {
+                console.log('[INIT] Starting interview initialization...');
+                await ensurePuterSignedIn();
+                console.log('[INIT] User signed in');
+
+                const saved = getSessionState();
+                if (saved.notes) setNotes(saved.notes);
+                if (saved.tabSwitchCount) setTabSwitchCount(saved.tabSwitchCount);
+                if (saved.pasteCount) setPasteCount(saved.pasteCount);
+
+                let stream: MediaStream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    console.log('[INIT] Media stream acquired (video + audio)');
+                } catch {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+                    setIsCamOn(false);
+                    console.log('[INIT] Media stream acquired (audio only, video failed)');
+                }
+
+                if (!mounted) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    console.log('[INIT] Component unmounted, stopping stream');
+                    return;
+                }
+
+                streamRef.current = stream;
+                if (videoRef.current && stream.getVideoTracks().length > 0) {
+                    videoRef.current.srcObject = stream;
+                }
+
+                setIsProcessing(true);
+                console.log('[INIT] Generating first greeting...');
+
+                const firstPrompt = `You are interviewing a candidate for a ${config.role} role. Start with a warm, personable greeting.
+
 Candidate Name: ${config.name}
-Interviewer Persona: ${config.persona}
+Difficulty Level: ${config.difficulty}
+Interview Style: ${config.persona}
 
-Conversation:
-${historyText}
+Greet them by name and ask an opening question about their experience with ${config.role}. Be conversational and welcoming. Keep it to 2-3 sentences max.
 
-Provide a comprehensive evaluation in JSON format with exactly this structure:
-{
-  "score": 8.5,
-  "strengths": ["strength 1", "strength 2"],
-  "weaknesses": ["weakness 1", "weakness 2"],
-  "feedback": "Overall feedback paragraph...",
-  "roundScores": {
-    "Technical": 8.0,
-    "Behavioral": 9.0
-  },
-  "improvementPlan": ["step 1", "step 2"]
-}
-Only output valid JSON.
-`;
-      // @ts-ignore
-      const res = await puter.ai.chat(prompt, { model: 'claude-3-5-sonnet' });
-      let jsonStr = extractText(res);
-      // Clean up markdown block if present
-      if (jsonStr.startsWith('\`\`\`json')) {
-        jsonStr = jsonStr.replace(/\`\`\`json/g, '').replace(/\`\`\`/g, '').trim();
-      }
-      const reportData: ReportData = JSON.parse(jsonStr);
-      
-      // Save to Puter FS
-      try {
-        // @ts-ignore
-        await puter.fs.write(`interview_report_${Date.now()}.json`, JSON.stringify({ config, transcript, report: reportData, flags }));
-      } catch (e) {
-        console.error("Failed to save report to FS", e);
-      }
+Respond with ONLY the greeting and question, nothing else.`;
 
-      onEnd(transcript, reportData);
-    } catch (err) {
-      console.error("Evaluation failed", err);
-      alert("Failed to generate evaluation. Please try again.");
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+                console.log('[INIT] First prompt prepared');
+                const first = await askInterviewer(firstPrompt);
+                const firstQuestion = first && first.trim().length > 8 ? first : fallbackQuestion(config);
+                console.log('[INIT] Using greeting:', firstQuestion.substring(0, 100));
 
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
+                if (mounted) {
+                    appendTranscript('interviewer', firstQuestion);
+                    setQuestionCount(1);
+                    questionCountRef.current = 1;
+                    console.log('[INIT] Greeting added to transcript, speaking...');
+                    try {
+                        await speak(firstQuestion);
+                        console.log('[INIT] Greeting spoken successfully');
+                    } catch (speakErr) {
+                        console.error('[INIT] Greeting TTS failed:', speakErr);
+                    }
+                }
+            } catch (error) {
+                console.error('[INIT] Failed to start interview', error);
+                if (mounted) {
+                    const backup = fallbackQuestion(config);
+                    appendTranscript('interviewer', backup);
+                    setQuestionCount(1);
+                    questionCountRef.current = 1;
+                    await speak(backup).catch(err => console.error('[INIT] Fallback speak failed', err));
+                }
+            } finally {
+                if (mounted) {
+                    setIsProcessing(false);
+                }
+            }
+        };
 
-  return (
-    <div className="h-screen w-full bg-[#0B0F14] flex flex-col md:flex-row overflow-hidden">
-      {/* Main Video Area */}
-      <div className="flex-1 relative flex flex-col p-4 gap-4">
-        {/* Top Bar */}
-        <div className="flex justify-between items-center px-4 py-2 bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 z-10">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="font-medium text-white/90">{config.role} Interview</span>
-          </div>
-          <div className="font-mono text-white/70">{formatTime(timeElapsed)}</div>
+        init();
+
+        return () => {
+            mounted = false;
+            mediaRecorderRef.current?.stop();
+            streamRef.current?.getTracks().forEach((t) => t.stop());
+        };
+    }, [config]);
+
+    useEffect(() => {
+        questionCountRef.current = questionCount;
+    }, [questionCount]);
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setTimeElapsed((prev) => prev + 1);
+        }, 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        const handleVisibility = () => {
+            if (!document.hidden || endedByPolicyRef.current) return;
+
+            setTabSwitchCount((prev) => {
+                const next = prev + 1;
+                setSessionState({ tabSwitchCount: next });
+                if (next >= MAX_TAB_SWITCHES) {
+                    terminateDueToIntegrity();
+                }
+                return next;
+            });
+        };
+
+        const handlePaste = () => {
+            setPasteCount((prev) => {
+                const next = prev + 1;
+                setSessionState({ pasteCount: next });
+                return next;
+            });
+        };
+
+        document.addEventListener('visibilitychange', handleVisibility);
+        document.addEventListener('paste', handlePaste);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+            document.removeEventListener('paste', handlePaste);
+        };
+    }, [tabSwitchCount, pasteCount]);
+
+    useEffect(() => {
+        transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [transcript]);
+
+    useEffect(() => {
+        setSessionState({ notes, tabSwitchCount, pasteCount });
+    }, [notes, tabSwitchCount, pasteCount]);
+
+    return (
+        <div className="flex h-full w-full flex-col gap-4 p-4 lg:flex-row">
+            <section className="flex min-h-0 flex-1 flex-col gap-4">
+                <Card className="p-4">
+                    <div className="flex items-center justify-between">
+                        <div className="space-y-1">
+                            <Badge>Live Interview</Badge>
+                            <p className="text-sm text-slate-700 dark:text-slate-200">
+                                {config.role} • {config.persona}
+                            </p>
+                        </div>
+                        <p className="font-mono text-sm text-slate-600 dark:text-slate-300">{formatClock(timeElapsed)}</p>
+                    </div>
+                </Card>
+
+                <Card className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_38%_30%,rgba(6,182,212,0.18),transparent_45%),radial-gradient(circle_at_75%_75%,rgba(250,204,21,0.12),transparent_35%)]" />
+
+                    <div className="relative z-10 flex flex-col items-center justify-center">
+                        <motion.div
+                            animate={{
+                                scale: isAiSpeaking ? [1, 1.08, 1] : [1, 1.02, 1],
+                                opacity: isAiSpeaking ? [0.35, 0.7, 0.35] : [0.2, 0.32, 0.2],
+                            }}
+                            transition={{ repeat: Infinity, duration: 2.1 }}
+                            className="absolute h-56 w-56 rounded-full bg-cyan-500/30 blur-3xl"
+                        />
+                        <div className="relative flex h-28 w-28 items-center justify-center rounded-full border border-cyan-300/50 bg-gradient-to-br from-cyan-500 to-teal-400 text-3xl font-semibold text-slate-950 shadow-[0_0_50px_rgba(45,212,191,0.35)]">
+                            {config.persona[0]}
+                        </div>
+                        <p className="mt-4 text-xs uppercase tracking-[0.16em] text-slate-600 dark:text-slate-300">
+                            {isAiSpeaking ? 'Interviewer speaking' : 'Listening'}
+                        </p>
+                    </div>
+
+                    <div className="absolute bottom-5 right-5 w-48 overflow-hidden rounded-lg border border-slate-300/25 bg-black/60">
+                        <video
+                            ref={videoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className={`aspect-video w-full object-cover ${!isCamOn ? 'hidden' : ''}`}
+                            style={{ transform: 'scaleX(-1)' }}
+                        />
+                        {!isCamOn ? (
+                            <div className="flex aspect-video items-center justify-center text-slate-400">
+                                <VideoOff className="h-6 w-6" />
+                            </div>
+                        ) : null}
+                    </div>
+
+                    <div className="pointer-events-none absolute bottom-20 left-0 right-0 flex justify-center px-3">
+                        <AnimatePresence mode="popLayout">
+                            {transcript.slice(-1).map((entry) => (
+                                <motion.div
+                                    key={entry.id}
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -6 }}
+                                    className="max-w-2xl rounded-md border border-slate-400/20 bg-slate-950/90 px-3 py-2 text-center backdrop-blur-sm"
+                                >
+                                    <p className="text-[9px] uppercase tracking-wider text-slate-400/70">
+                                        {entry.role === 'interviewer' ? config.persona : 'You'}
+                                    </p>
+                                    <p className="mt-0.5 text-xs text-slate-100 leading-snug">{entry.text}</p>
+                                </motion.div>
+                            ))}
+                        </AnimatePresence>
+                    </div>
+                </Card>
+
+                <Card className="p-3">
+                    <div className="flex items-center justify-center gap-3">
+                        <Button type="button" size="icon" onClick={toggleMic} disabled={isProcessing || endedByPolicyRef.current}>
+                            {isMicOn ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+                        </Button>
+
+                        <Button type="button" size="icon" variant="outline" onClick={toggleCam}>
+                            {isCamOn ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+                        </Button>
+
+                        <Separator orientation="vertical" className="h-7" />
+
+                        <Button type="button" variant="destructive" onClick={() => endInterview()} disabled={isProcessing || endedByPolicyRef.current}>
+                            {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <PhoneOff className="h-4 w-4" />}
+                            End Interview
+                        </Button>
+                    </div>
+                </Card>
+            </section>
+
+            <aside className="flex w-full min-h-0 flex-col gap-3 lg:w-96">
+                <Card>
+                    <CardContent className="space-y-4 p-4">
+                        <div>
+                            <div className="mb-1 flex items-center justify-between text-sm text-slate-700 dark:text-slate-200">
+                                <span>
+                                    Question {Math.min(questionCount, MAX_QUESTIONS)} of {MAX_QUESTIONS}
+                                </span>
+                                <span>{progress}%</span>
+                            </div>
+                            <Progress value={progress} />
+                        </div>
+
+                        <div className="space-y-1 rounded-lg border border-amber-400/35 bg-amber-500/12 p-3 text-xs text-amber-900 dark:border-amber-300/30 dark:bg-amber-500/10 dark:text-amber-100">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
+                                <AlertTriangle className="h-4 w-4" />
+                                Integrity Monitor
+                            </div>
+                            <p>Tab switches: {tabSwitchCount}/{MAX_TAB_SWITCHES}</p>
+                            <p>Paste actions: {pasteCount}</p>
+                            <p className="text-amber-800/85 dark:text-amber-200/85">At 5 tab switches, interview ends and requires admin reschedule.</p>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="flex min-h-0 flex-1 flex-col">
+                    <div className="flex border-b border-slate-300/20">
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('notes')}
+                            className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 text-sm ${activeTab === 'notes' ? 'bg-cyan-500/15 text-cyan-900 dark:bg-slate-800 dark:text-cyan-200' : 'text-slate-700 dark:text-slate-300'
+                                }`}
+                        >
+                            <NotebookPen className="h-4 w-4" />
+                            Notes
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab('transcript')}
+                            className={`flex flex-1 items-center justify-center gap-2 px-3 py-2 text-sm ${activeTab === 'transcript' ? 'bg-cyan-500/15 text-cyan-900 dark:bg-slate-800 dark:text-cyan-200' : 'text-slate-700 dark:text-slate-300'
+                                }`}
+                        >
+                            <ClipboardList className="h-4 w-4" />
+                            Transcript
+                        </button>
+                    </div>
+
+                    {activeTab === 'notes' ? (
+                        <div className="flex h-full flex-col p-4">
+                            <Textarea
+                                className="h-full min-h-[260px]"
+                                value={notes}
+                                onChange={(event) => setNotes(event.target.value)}
+                                placeholder="Jot down key points while interview runs..."
+                            />
+                        </div>
+                    ) : (
+                        <div className="h-full space-y-3 overflow-y-auto p-4">
+                            {transcript.map((entry) => (
+                                <div key={entry.id} className={`flex flex-col ${entry.role === 'candidate' ? 'items-end' : 'items-start'}`}>
+                                    <p className="mb-1 text-xs text-slate-600 dark:text-slate-400">{entry.role === 'interviewer' ? config.persona : 'You'}</p>
+                                    <div
+                                        className={`max-w-[90%] rounded-md px-3 py-2 text-sm ${entry.role === 'candidate'
+                                            ? 'bg-cyan-500/80 text-slate-950'
+                                            : 'border border-slate-400/50 bg-white/95 text-slate-900 dark:border-slate-300/20 dark:bg-slate-900/60 dark:text-slate-100'
+                                            }`}
+                                    >
+                                        {entry.text}
+                                    </div>
+                                </div>
+                            ))}
+                            <div ref={transcriptEndRef} />
+                        </div>
+                    )}
+                </Card>
+            </aside>
         </div>
-
-        {/* Video Grid */}
-        <div className="flex-1 relative rounded-3xl overflow-hidden bg-black/40 border border-white/5 flex items-center justify-center">
-          {/* AI Avatar / Waveform */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <motion.div 
-              animate={{ 
-                scale: isAiSpeaking ? [1, 1.1, 1] : 1,
-                opacity: isAiSpeaking ? [0.5, 0.8, 0.5] : 0.3
-              }}
-              transition={{ repeat: Infinity, duration: 2 }}
-              className="w-48 h-48 rounded-full bg-blue-500/20 blur-3xl absolute"
-            />
-            <div className="relative z-10 w-32 h-32 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-[0_0_40px_rgba(59,130,246,0.3)]">
-              <span className="text-4xl font-bold text-white">{config.persona[0]}</span>
-            </div>
-            <p className="mt-6 text-white/60 font-medium tracking-widest uppercase text-sm">
-              {isAiSpeaking ? 'Speaking...' : 'Listening...'}
-            </p>
-          </div>
-
-          {/* User Webcam (PiP) */}
-          <div className="absolute bottom-6 right-6 w-48 aspect-video bg-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              muted 
-              className={`w-full h-full object-cover ${!isCamOn ? 'hidden' : ''}`} 
-              style={{ transform: 'scaleX(-1)' }}
-            />
-            {!isCamOn && (
-              <div className="w-full h-full flex items-center justify-center bg-gray-900">
-                <VideoOff className="w-8 h-8 text-white/30" />
-              </div>
-            )}
-          </div>
-
-          {/* Live Transcript Overlay (Captions) */}
-          <div className="absolute bottom-6 left-0 right-0 flex flex-col items-center pointer-events-none px-4 z-20">
-            <AnimatePresence mode="popLayout">
-              {transcript.slice(-1).map(t => (
-                <motion.div
-                  key={t.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className="bg-black/80 backdrop-blur-md rounded-2xl px-8 py-4 max-w-3xl text-center shadow-2xl border border-white/10"
-                >
-                  <p className="text-white/50 text-xs font-semibold mb-1 uppercase tracking-wider">
-                    {t.role === 'interviewer' ? config.persona : 'You'}
-                  </p>
-                  <p className="text-white text-lg md:text-xl leading-relaxed">
-                    {t.text}
-                  </p>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
-        </div>
-
-        {/* Bottom Controls */}
-        <div className="h-20 bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 flex items-center justify-center gap-4 px-6">
-          <button 
-            onClick={toggleMic}
-            disabled={isProcessing || isAiSpeaking}
-            className={`w-14 h-14 rounded-full flex items-center justify-center transition-all relative ${
-              isMicOn 
-                ? 'bg-blue-500 text-white shadow-[0_0_20px_rgba(59,130,246,0.5)]' 
-                : 'bg-white/10 text-white/70 hover:bg-white/20'
-            } disabled:opacity-50`}
-          >
-            {isMicOn && (
-              <span className="absolute inset-0 rounded-full bg-blue-500 animate-ping opacity-75"></span>
-            )}
-            <span className="relative z-10">
-              {isMicOn ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
-            </span>
-          </button>
-          
-          <button 
-            onClick={toggleCam}
-            className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${
-              isCamOn ? 'bg-white/10 text-white/70 hover:bg-white/20' : 'bg-red-500/20 text-red-400 border border-red-500/30'
-            }`}
-          >
-            {isCamOn ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
-          </button>
-
-          <div className="w-px h-8 bg-white/10 mx-2" />
-
-          <button 
-            onClick={endInterview}
-            disabled={isProcessing}
-            className="px-6 h-14 rounded-full bg-red-500 hover:bg-red-600 text-white font-medium flex items-center gap-2 transition-all disabled:opacity-50"
-          >
-            {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <PhoneOff className="w-5 h-5" />}
-            End Interview
-          </button>
-        </div>
-      </div>
-
-      {/* Right Sidebar */}
-      <div className="w-full md:w-80 bg-white/5 border-l border-white/10 flex flex-col backdrop-blur-xl">
-        <div className="p-6 border-b border-white/10">
-          <h3 className="text-lg font-semibold text-white/90 mb-2">Progress</h3>
-          <div className="flex items-center justify-between text-sm text-white/60 mb-3">
-            <span>Question {questionCount} of {MAX_QUESTIONS}</span>
-            <span>{Math.round((questionCount / MAX_QUESTIONS) * 100)}%</span>
-          </div>
-          <div className="h-2 bg-black/40 rounded-full overflow-hidden">
-            <motion.div 
-              className="h-full bg-blue-500"
-              initial={{ width: 0 }}
-              animate={{ width: `${(questionCount / MAX_QUESTIONS) * 100}%` }}
-            />
-          </div>
-        </div>
-
-        {flags.length > 0 && (
-          <div className="p-4 mx-4 mt-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-            <div>
-              <h4 className="text-sm font-medium text-red-400">Proctoring Flags</h4>
-              <ul className="text-xs text-red-400/70 mt-1 list-disc list-inside">
-                {flags.map((f, i) => <li key={i}>{f}</li>)}
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {/* Tabs */}
-        <div className="flex border-b border-white/10 mt-2">
-          <button
-            onClick={() => setActiveTab('notes')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'notes' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-white/50 hover:text-white/80'}`}
-          >
-            Notes
-          </button>
-          <button
-            onClick={() => setActiveTab('transcript')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'transcript' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-white/50 hover:text-white/80'}`}
-          >
-            Transcript
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {activeTab === 'notes' ? (
-            <div className="flex-1 p-6 flex flex-col">
-              <textarea 
-                value={notes}
-                onChange={e => {
-                  setNotes(e.target.value);
-                  // @ts-ignore
-                  if (window.puter) puter.kv.set("notes", e.target.value);
-                }}
-                className="flex-1 w-full bg-black/20 border border-white/10 rounded-xl p-4 text-white/80 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all resize-none"
-                placeholder="Jot down your thoughts here..."
-              />
-            </div>
-          ) : (
-            <div className="flex-1 p-6 overflow-y-auto space-y-4 scrollbar-hide">
-              {transcript.map(t => (
-                <div key={t.id} className={`flex flex-col ${t.role === 'candidate' ? 'items-end' : 'items-start'}`}>
-                  <span className="text-xs text-white/40 mb-1">{t.role === 'interviewer' ? config.persona : 'You'}</span>
-                  <div className={`p-3 rounded-xl max-w-[90%] text-sm ${t.role === 'candidate' ? 'bg-blue-600 text-white' : 'bg-white/10 text-white/90'}`}>
-                    {t.text}
-                  </div>
-                </div>
-              ))}
-              <div ref={transcriptEndRef} />
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+    );
 }

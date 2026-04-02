@@ -1,216 +1,222 @@
-import { useState, useRef } from 'react';
-import { UploadCloud, Check, ChevronRight } from 'lucide-react';
-import { InterviewConfig } from '@/types';
+'use client';
 
-const PERSONAS = ['CEO', 'CTO', 'HR', 'Engineering Manager'];
-const ROUNDS = ['Technical', 'Behavioral', 'HR'];
-const DIFFICULTIES = ['Easy', 'Medium', 'Hard', 'Practice'];
+import { useMemo, useRef, useState } from 'react';
+import { Check, ChevronRight, UploadCloud } from 'lucide-react';
+import { ensurePuterSignedIn } from '@/lib/puter';
+import { InterviewConfig, InterviewDifficulty, InterviewPersona } from '@/types';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+
+const PERSONAS: { value: InterviewPersona; subtitle: string }[] = [
+    { value: 'CEO', subtitle: 'Business and strategic perspective' },
+    { value: 'CTO', subtitle: 'Architecture and technical depth' },
+    { value: 'HR', subtitle: 'Communication and culture fit' },
+    { value: 'Engineering Manager', subtitle: 'Execution and team impact' },
+];
+
+const ROUNDS = ['Technical', 'Behavioral', 'HR'] as const;
+const DIFFICULTIES: InterviewDifficulty[] = ['Easy', 'Medium', 'Hard', 'Practice'];
 
 export default function SetupScreen({ onStart }: { onStart: (config: InterviewConfig) => void }) {
-  const [name, setName] = useState('');
-  const [role, setRole] = useState('');
-  const [jd, setJd] = useState('');
-  const [persona, setPersona] = useState('CTO');
-  const [rounds, setRounds] = useState<string[]>(['Technical']);
-  const [difficulty, setDifficulty] = useState('Medium');
-  const [resumeFile, setResumeFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+    const [name, setName] = useState('');
+    const [role, setRole] = useState('');
+    const [jd, setJd] = useState('');
+    const [persona, setPersona] = useState<InterviewPersona>('CTO');
+    const [rounds, setRounds] = useState<string[]>(['Technical']);
+    const [difficulty, setDifficulty] = useState<InterviewDifficulty>('Medium');
+    const [resumeFile, setResumeFile] = useState<File | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleRoundToggle = (r: string) => {
-    setRounds(prev => prev.includes(r) ? prev.filter(x => x !== r) : [...prev, r]);
-  };
+    const canStart = useMemo(() => Boolean(name.trim() && role.trim() && rounds.length > 0), [name, role, rounds.length]);
 
-  const handleFileDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setResumeFile(e.dataTransfer.files[0]);
-    }
-  };
+    const toggleRound = (round: string) => {
+        setRounds((prev) => (prev.includes(round) ? prev.filter((r) => r !== round) : [...prev, round]));
+    };
 
-  const handleStart = async () => {
-    if (!name || !role) return alert('Please enter name and role');
-    
-    setIsUploading(true);
-    try {
-      // @ts-ignore
-      if (window.puter && !(await puter.auth.isSignedIn())) {
-        // @ts-ignore
-        await puter.auth.signIn();
-      }
-    } catch (e) {
-      console.error('Auth failed', e);
-      alert('Authentication failed. Please sign in to continue.');
-      setIsUploading(false);
-      return;
-    }
+    const handleStart = async () => {
+        if (!canStart) {
+            alert('Please enter candidate name, role, and at least one round.');
+            return;
+        }
 
-    let resumePath = '';
-    if (resumeFile) {
-      try {
-        // @ts-ignore
-        const puterFile = await puter.fs.write(`resume_${Date.now()}_${resumeFile.name}`, resumeFile);
-        resumePath = puterFile.path;
-      } catch (e) {
-        console.error('Failed to upload resume', e);
-        alert('Failed to upload resume. Continuing without it.');
-      }
-    }
-    setIsUploading(false);
+        setIsSubmitting(true);
+        try {
+            const puterClient = await ensurePuterSignedIn();
+            let resumePath = '';
 
-    onStart({
-      name,
-      role,
-      jd,
-      persona,
-      rounds,
-      difficulty,
-      resumePath
-    });
-  };
+            if (resumeFile) {
+                try {
+                    const stored = await puterClient.fs.write(`resume_${Date.now()}_${resumeFile.name}`, resumeFile);
+                    resumePath = stored.path;
+                } catch (error) {
+                    console.error('Resume upload failed', error);
+                    alert('Resume upload failed. Continuing without resume.');
+                }
+            }
 
-  return (
-    <div className="max-w-4xl mx-auto px-6 py-12 space-y-8 pb-32">
-      <div className="space-y-2">
-        <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
-          AI Interview Setup
-        </h1>
-        <p className="text-white/50 text-lg">Configure your interview environment</p>
-      </div>
+            onStart({
+                name: name.trim(),
+                role: role.trim(),
+                jd: jd.trim(),
+                persona,
+                rounds,
+                difficulty,
+                resumePath,
+            });
+        } catch (error) {
+            console.error('Puter sign-in failed', error);
+            alert('Unable to continue without Puter login. Please try again.');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* User Info */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-xl space-y-4">
-          <h2 className="text-xl font-semibold text-white/90">Your Info</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-white/50 mb-1">Full Name</label>
-              <input 
-                type="text" 
-                value={name}
-                onChange={e => setName(e.target.value)}
-                className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                placeholder="Jane Doe"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-white/50 mb-1">Target Role</label>
-              <input 
-                type="text" 
-                value={role}
-                onChange={e => setRole(e.target.value)}
-                className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all"
-                placeholder="Senior Frontend Engineer"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-white/50 mb-1">Resume (Optional)</label>
-              <div 
-                onDragOver={e => e.preventDefault()}
-                onDrop={handleFileDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-white/20 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer hover:border-blue-500/50 hover:bg-blue-500/5 transition-all"
-              >
-                <UploadCloud className="w-8 h-8 text-white/40 mb-2" />
-                <p className="text-sm text-white/70">
-                  {resumeFile ? resumeFile.name : 'Click or drag to upload'}
-                </p>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  className="hidden" 
-                  accept=".pdf,.doc,.docx,.txt"
-                  onChange={e => e.target.files && setResumeFile(e.target.files[0])}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Job Description */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-xl flex flex-col">
-          <h2 className="text-xl font-semibold text-white/90 mb-4">Job Description</h2>
-          <textarea 
-            value={jd}
-            onChange={e => setJd(e.target.value)}
-            className="flex-1 w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all resize-none min-h-[200px]"
-            placeholder="Paste the job description here to tailor the interview questions..."
-          />
-        </div>
-      </div>
-
-      {/* Persona */}
-      <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-xl space-y-4">
-        <h2 className="text-xl font-semibold text-white/90">Interviewer Persona</h2>
-        <div className="flex flex-wrap gap-3">
-          {PERSONAS.map(p => (
-            <button
-              key={p}
-              onClick={() => setPersona(p)}
-              className={`px-5 py-2.5 rounded-full text-sm font-medium transition-all ${
-                persona === p 
-                  ? 'bg-blue-500 text-white shadow-[0_0_20px_rgba(59,130,246,0.3)] border border-blue-400/50' 
-                  : 'bg-white/5 text-white/70 border border-white/10 hover:bg-white/10'
-              }`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Rounds */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-xl space-y-4">
-          <h2 className="text-xl font-semibold text-white/90">Interview Rounds</h2>
-          <div className="space-y-3">
-            {ROUNDS.map(r => (
-              <label key={r} className="flex items-center p-4 rounded-xl border border-white/10 bg-black/20 cursor-pointer hover:bg-white/5 transition-all">
-                <div className={`w-5 h-5 rounded flex items-center justify-center border ${rounds.includes(r) ? 'bg-blue-500 border-blue-500' : 'border-white/30'}`}>
-                  {rounds.includes(r) && <Check className="w-3 h-3 text-white" />}
+    return (
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-8 pb-28 md:px-8">
+            <section className="space-y-4">
+                <Badge>Setup Workspace</Badge>
+                <div className="space-y-2">
+                    <h1 className="text-4xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Configure interview flow</h1>
+                    <p className="max-w-3xl text-slate-700 dark:text-slate-300">
+                        Fill profile, rounds, and difficulty. After this, the app routes to a dedicated interview room screen.
+                    </p>
                 </div>
-                <input type="checkbox" className="hidden" checked={rounds.includes(r)} onChange={() => handleRoundToggle(r)} />
-                <span className="ml-3 text-white/80">{r}</span>
-              </label>
-            ))}
-          </div>
-        </div>
+            </section>
 
-        {/* Difficulty */}
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-6 backdrop-blur-xl space-y-4">
-          <h2 className="text-xl font-semibold text-white/90">Difficulty</h2>
-          <div className="grid grid-cols-2 gap-3">
-            {DIFFICULTIES.map(d => (
-              <button
-                key={d}
-                onClick={() => setDifficulty(d)}
-                className={`py-4 rounded-xl text-sm font-medium transition-all border ${
-                  difficulty === d 
-                    ? 'bg-blue-500/20 border-blue-500/50 text-blue-200' 
-                    : 'bg-black/20 border-white/10 text-white/60 hover:bg-white/5'
-                }`}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+            <div className="grid gap-6 lg:grid-cols-3">
+                <Card className="lg:col-span-1">
+                    <CardHeader>
+                        <CardTitle>Candidate Info</CardTitle>
+                        <CardDescription>Name, target role, and optional resume upload.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="candidate-name">Candidate Name</Label>
+                            <Input id="candidate-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Aryan Kumar" />
+                        </div>
 
-      {/* CTA */}
-      <div className="fixed bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[#0B0F14] via-[#0B0F14]/80 to-transparent flex justify-center pointer-events-none">
-        <button
-          onClick={handleStart}
-          disabled={isUploading || !name || !role}
-          className="pointer-events-auto group relative inline-flex items-center justify-center px-8 py-4 font-bold text-white transition-all duration-200 bg-blue-600 rounded-full hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-600 disabled:opacity-50 disabled:cursor-not-allowed shadow-[0_0_40px_rgba(59,130,246,0.4)] hover:shadow-[0_0_60px_rgba(59,130,246,0.6)] overflow-hidden"
-        >
-          <span className="relative z-10 flex items-center gap-2">
-            {isUploading ? 'Uploading Resume...' : 'Start Interview'}
-            {!isUploading && <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />}
-          </span>
-          <div className="absolute inset-0 h-full w-full bg-gradient-to-r from-blue-600 via-indigo-500 to-blue-600 opacity-0 group-hover:opacity-100 transition-opacity duration-500 bg-[length:200%_auto] animate-gradient" />
-        </button>
-      </div>
-    </div>
-  );
+                        <div className="space-y-2">
+                            <Label htmlFor="target-role">Target Role</Label>
+                            <Input id="target-role" value={role} onChange={(event) => setRole(event.target.value)} placeholder="SDE II" />
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Resume Upload</Label>
+                            <button
+                                type="button"
+                                onClick={() => fileInputRef.current?.click()}
+                                className="flex w-full flex-col items-center justify-center rounded-lg border border-dashed border-cyan-400/35 bg-cyan-500/8 px-4 py-6 text-center text-sm text-slate-700 transition hover:border-cyan-500/60 hover:bg-cyan-500/12 dark:border-cyan-300/30 dark:text-slate-300 dark:hover:border-cyan-300/60 dark:hover:bg-cyan-500/10"
+                            >
+                                <UploadCloud className="mb-2 h-5 w-5 text-cyan-700 dark:text-cyan-200" />
+                                {resumeFile ? resumeFile.name : 'Click to upload (pdf/doc/docx/txt)'}
+                            </button>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept=".pdf,.doc,.docx,.txt"
+                                className="hidden"
+                                onChange={(event) => setResumeFile(event.target.files?.[0] ?? null)}
+                            />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card className="lg:col-span-2">
+                    <CardHeader>
+                        <CardTitle>Interview Blueprint</CardTitle>
+                        <CardDescription>Job context, interviewer personality, rounds, and difficulty.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+                        <div className="space-y-2">
+                            <Label htmlFor="jd">Job Description</Label>
+                            <Textarea
+                                id="jd"
+                                value={jd}
+                                onChange={(event) => setJd(event.target.value)}
+                                className="min-h-[170px]"
+                                placeholder="Paste job description and expectations for better question quality."
+                            />
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Interviewer Character</Label>
+                            <div className="grid gap-2 md:grid-cols-2">
+                                {PERSONAS.map((item) => {
+                                    const selected = persona === item.value;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={item.value}
+                                            onClick={() => setPersona(item.value)}
+                                            className={`rounded-lg border px-3 py-3 text-left transition ${selected ? 'border-cyan-400/60 bg-cyan-500/18' : 'border-slate-400/45 bg-white/90 hover:border-slate-500/60 dark:border-slate-300/20 dark:bg-slate-950/50 dark:hover:border-slate-300/40'
+                                                }`}
+                                        >
+                                            <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{item.value}</p>
+                                            <p className="text-xs text-slate-700 dark:text-slate-400">{item.subtitle}</p>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Interview Rounds</Label>
+                                <div className="space-y-2">
+                                    {ROUNDS.map((round) => {
+                                        const selected = rounds.includes(round);
+                                        return (
+                                            <button
+                                                type="button"
+                                                key={round}
+                                                onClick={() => toggleRound(round)}
+                                                className={`flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm transition ${selected ? 'border-cyan-400/60 bg-cyan-500/18 text-cyan-900 dark:text-cyan-100' : 'border-slate-400/45 bg-white/90 text-slate-800 dark:border-slate-300/20 dark:bg-slate-950/50 dark:text-slate-200'
+                                                    }`}
+                                            >
+                                                <span className={`inline-flex h-4 w-4 items-center justify-center rounded border ${selected ? 'border-cyan-400 bg-cyan-300 text-slate-900' : 'border-slate-500/45 dark:border-slate-400/40'}`}>
+                                                    {selected ? <Check className="h-3 w-3" /> : null}
+                                                </span>
+                                                {round}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label>Difficulty</Label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {DIFFICULTIES.map((item) => {
+                                        const selected = difficulty === item;
+                                        return (
+                                            <Button
+                                                key={item}
+                                                type="button"
+                                                variant={selected ? 'default' : 'outline'}
+                                                onClick={() => setDifficulty(item)}
+                                            >
+                                                {item}
+                                            </Button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+
+            <div className="fixed inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-slate-100/95 to-transparent px-6 py-5 dark:from-slate-950">
+                <Button size="lg" disabled={!canStart || isSubmitting} onClick={handleStart}>
+                    {isSubmitting ? 'Preparing...' : 'Start Interview'}
+                    {!isSubmitting ? <ChevronRight className="h-4 w-4" /> : null}
+                </Button>
+            </div>
+        </div>
+    );
 }
