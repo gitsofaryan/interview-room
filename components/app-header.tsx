@@ -24,7 +24,7 @@ export function AppHeader() {
                     <span className="rounded-md bg-cyan-500/20 p-1.5 text-cyan-700 dark:text-cyan-200">
                         <BotMessageSquare className="h-4 w-4" />
                     </span>
-                    <span className="text-sm font-semibold tracking-wide">AI Interview Pro</span>
+                    <span className="text-sm font-semibold tracking-wide">Interview Room</span>
                 </Link>
 
                 <nav className="hidden items-center gap-1 md:flex">

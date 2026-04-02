@@ -1,5 +1,5 @@
 {
-  "name": "AI Interview Pro",
+  "name": "Interview Room",
   "description": "AI-powered interview simulator using Puter.js",
   "requestFramePermissions": ["camera", "microphone"]
 }

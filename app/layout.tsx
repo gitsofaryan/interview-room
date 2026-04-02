@@ -19,7 +19,7 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: 'AI Interview Pro',
+  title: 'Interview Room',
   description: 'AI-powered interview simulator using Puter',
 };
 
