@@ -1,27 +1,27 @@
 @import "tailwindcss";
 
 :root {
-	--bg-0: #eef4ff;
-	--bg-1: #e2ecff;
-	--bg-2: #f9fbff;
-	--text-main: #0f172a;
-	--surface: rgba(255, 255, 255, 0.9);
-	--surface-border: rgba(15, 23, 42, 0.2);
+  --bg-0: #eef4ff;
+  --bg-1: #e2ecff;
+  --bg-2: #f9fbff;
+  --text-main: #0f172a;
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-border: rgba(15, 23, 42, 0.2);
 }
 
 .dark {
-	--bg-0: #060b13;
-	--bg-1: #0b1422;
-	--bg-2: #131a2c;
-	--text-main: #e6edf7;
-	--surface: rgba(2, 6, 23, 0.66);
-	--surface-border: rgba(203, 213, 225, 0.2);
+  --bg-0: #060b13;
+  --bg-1: #0b1422;
+  --bg-2: #131a2c;
+  --text-main: #e6edf7;
+  --surface: rgba(2, 6, 23, 0.66);
+  --surface-border: rgba(203, 213, 225, 0.2);
 }
 
 html,
 body {
-	font-family: var(--font-body), sans-serif;
-	color: var(--text-main);
+  font-family: var(--font-body), sans-serif;
+  color: var(--text-main);
 }
 
 h1,
@@ -30,27 +30,27 @@ h3,
 h4,
 h5,
 h6 {
-	font-family: var(--font-display), sans-serif;
+  font-family: var(--font-display), sans-serif;
 }
 
 .app-bg {
-	background:
-		radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.18), transparent 40%),
-		radial-gradient(circle at 82% 88%, rgba(245, 158, 11, 0.14), transparent 42%),
-		linear-gradient(160deg, var(--bg-0), var(--bg-1) 55%, var(--bg-2));
+  background:
+    radial-gradient(circle at 20% 12%, rgba(56, 189, 248, 0.18), transparent 40%),
+    radial-gradient(circle at 82% 88%, rgba(245, 158, 11, 0.14), transparent 42%),
+    linear-gradient(160deg, var(--bg-0), var(--bg-1) 55%, var(--bg-2));
 }
 
 * {
-	scrollbar-width: thin;
-	scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
 }
 
 *::-webkit-scrollbar {
-	width: 8px;
-	height: 8px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-thumb {
-	background: rgba(148, 163, 184, 0.35);
-	border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
 }
