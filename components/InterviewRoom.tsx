@@ -36,6 +36,7 @@ export default function InterviewRoom({ config, onEnd }: { config: InterviewConf
     const [notes, setNotes] = useState('');
     const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
 
+    const [resumeText, setResumeText] = useState('');
     const transcriptRef = useRef<TranscriptItem[]>([]);
     const questionCountRef = useRef(0);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -91,10 +92,18 @@ export default function InterviewRoom({ config, onEnd }: { config: InterviewConf
             return;
         }
 
-        const prompt = `Interviewer Persona: ${config.persona}. Role: ${config.role}. 
-Context: ${fullTranscript.slice(-4).map(t => `${t.role}: ${t.text}`).join('\n')}
+        const prompt = `Interviewer Persona: ${config.persona}. Target Role: ${config.role}. 
+Job Description: ${config.jd || 'Standard industry expectations.'}
+Candidate Resume Context: ${resumeText || 'No resume provided.'}
+
+Interview History:
+${fullTranscript.slice(-6).map(t => `${t.role}: ${t.text}`).join('\n')}
+
 Candidate just said: "${userAnswer}"
-Ask ONE concise follow-up question (max 2 sentences). Be natural and fast.`;
+
+Task: Ask ONE concise question (max 2 sentences). 
+Strategy: Be extremely generous, human, and encouraging. Use warm affirmations (e.g., "That's a really insightful point," "I love that approach"). 
+Maintain a supportive human tone while either following up on their point or pivoting to a new topic from their resume/JD. Make the candidate feel comfortable and valued.`;
 
         const client = await waitForPuter();
         const response = await client.ai.chat(prompt);
@@ -219,7 +228,7 @@ Ask ONE concise follow-up question (max 2 sentences). Be natural and fast.`;
     useEffect(() => {
         let mounted = true;
         const init = async () => {
-            await ensurePuterSignedIn();
+            const client = await ensurePuterSignedIn();
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }));
             if (!mounted) return;
             streamRef.current = stream;
@@ -227,7 +236,27 @@ Ask ONE concise follow-up question (max 2 sentences). Be natural and fast.`;
             
             setIsProcessing(true);
             setProcessingStatus('Starting...');
-            const greeting = await (await waitForPuter()).ai.chat(`You are ${config.persona} interviewing ${config.name} for ${config.role}. Give a 1-sentence fast greeting.`);
+
+            // Fetch resume content if path exists
+            let content = '';
+            if (config.resumePath) {
+                try {
+                    const text = await client.fs.readText(config.resumePath);
+                    if (mounted) {
+                        setResumeText(text);
+                        content = text;
+                    }
+                } catch (err) {
+                    console.error('Failed to read resume', err);
+                }
+            }
+
+            const prompt = `You are ${config.persona} interviewing ${config.name} for ${config.role}. 
+Job Description: ${config.jd}
+Resume: ${content}
+Give a warm, generous, and human 1-sentence greeting. Mention you're excited to chat and ask the first short question based on their background.`;
+
+            const greeting = await client.ai.chat(prompt);
             const text = readChatText(greeting) || `Hello ${config.name}, let's start.`;
             if (mounted) {
                 appendTranscript('interviewer', text);
