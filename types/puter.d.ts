@@ -27,7 +27,7 @@ declare global {
       options?: { model?: string },
     ): Promise<PuterChatResponse | string>;
     speech2txt(audio: Blob): Promise<unknown>;
-    txt2speech(text: string): Promise<HTMLAudioElement>;
+    txt2speech(text: string): Promise<HTMLAudioElement | string>;
   }
 
   interface PuterKv {
@@ -37,6 +37,7 @@ declare global {
 
   interface PuterFs {
     write(path: string, data: string | Blob | File): Promise<PuterStoredFile>;
+    read(path: string): Promise<Blob>;
   }
 
   interface Puter {

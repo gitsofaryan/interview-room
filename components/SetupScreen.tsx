@@ -211,10 +211,10 @@ export default function SetupScreen({ onStart }: { onStart: (config: InterviewCo
                 </Card>
             </div>
 
-            <div className="fixed inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-slate-100/95 to-transparent px-6 py-5 dark:from-slate-950">
-                <Button size="lg" disabled={!canStart || isSubmitting} onClick={handleStart}>
+            <div className="fixed inset-x-0 bottom-0 z-20 flex justify-center bg-white/80 backdrop-blur-md border-t px-6 py-4 dark:bg-slate-950/80">
+                <Button size="lg" disabled={!canStart || isSubmitting} onClick={handleStart} className="w-full max-w-md">
                     {isSubmitting ? 'Preparing...' : 'Start Interview'}
-                    {!isSubmitting ? <ChevronRight className="h-4 w-4" /> : null}
+                    {!isSubmitting ? <ChevronRight className="ml-2 h-4 w-4" /> : null}
                 </Button>
             </div>
         </div>

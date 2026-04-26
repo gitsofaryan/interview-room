@@ -140,20 +140,20 @@ export default function ReportScreen({ report, onRetry }: { report: ReportData, 
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap items-center justify-center gap-4 pt-8">
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
         <Button
           variant="outline"
           onClick={onRetry}
-          className="rounded-full px-8 py-4"
+          className="w-full sm:w-auto rounded-full px-8 py-6 h-auto"
         >
-          <RotateCcw className="w-5 h-5" />
+          <RotateCcw className="mr-2 w-5 h-5" />
           Start New Interview
         </Button>
         <Button
           onClick={handleDownload}
-          className="rounded-full border-cyan-300/40 bg-gradient-to-r from-cyan-500 to-teal-400 px-8 py-4 font-semibold text-slate-950 shadow-[0_0_30px_rgba(45,212,191,0.4)] transition hover:scale-[1.01] hover:from-cyan-400 hover:to-teal-300"
+          className="w-full sm:w-auto rounded-full border-cyan-300/40 bg-gradient-to-r from-cyan-500 to-teal-400 px-8 py-6 h-auto font-semibold text-slate-950 shadow-[0_0_30px_rgba(45,212,191,0.4)] transition hover:scale-[1.01] hover:from-cyan-400 hover:to-teal-300"
         >
-          <Download className="w-5 h-5" />
+          <Download className="mr-2 w-5 h-5" />
           Download Report
         </Button>
       </div>
